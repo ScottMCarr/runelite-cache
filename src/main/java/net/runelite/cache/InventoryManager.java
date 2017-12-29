@@ -22,71 +22,63 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-package net.runelite.cache.server;
+package net.runelite.cache;
 
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import net.runelite.cache.definitions.InventoryDefinition;
+import net.runelite.cache.definitions.loaders.InventoryLoader;
+import net.runelite.cache.fs.Archive;
+import net.runelite.cache.fs.ArchiveFiles;
+import net.runelite.cache.fs.FSFile;
+import net.runelite.cache.fs.Index;
+import net.runelite.cache.fs.Storage;
 import net.runelite.cache.fs.Store;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-public class CacheServer implements AutoCloseable
+public class InventoryManager
 {
-	private static final Logger logger = LoggerFactory.getLogger(CacheServer.class);
-
-	private static final int PORT = 43594;
-
-	private final EventLoopGroup group = new NioEventLoopGroup(1);
-
-	private Channel channel;
-
 	private final Store store;
-	private final int revision;
+	private final List<InventoryDefinition> inventories = new ArrayList<>();
 
-	public CacheServer(Store store, int revision)
+	public InventoryManager(Store store)
 	{
 		this.store = store;
-		this.revision = revision;
 	}
 
-	public void start()
+	public void load() throws IOException
 	{
-		ServerBootstrap b = new ServerBootstrap();
-		b.group(group)
-			.channel(NioServerSocketChannel.class)
-			.option(ChannelOption.TCP_NODELAY, true)
-			.childHandler(new CacheServerInitializer(this));
+		InventoryLoader loader = new InventoryLoader();
 
-		ChannelFuture f = b.bind(PORT).syncUninterruptibly();
-		channel = f.channel();
+		Storage storage = store.getStorage();
+		Index index = store.getIndex(IndexType.CONFIGS);
+		Archive archive = index.getArchive(ConfigType.INV.getId());
 
-		logger.info("Server is now listening on {}", PORT);
+		byte[] archiveData = storage.loadArchive(archive);
+		ArchiveFiles files = archive.getFiles(archiveData);
+
+		for (FSFile file : files.getFiles())
+		{
+			InventoryDefinition inv = loader.load(file.getFileId(), file.getContents());
+			inventories.add(inv);
+		}
 	}
 
-	public void waitForClose()
+	public List<InventoryDefinition> getInventories()
 	{
-		channel.closeFuture().awaitUninterruptibly();
+		return Collections.unmodifiableList(inventories);
 	}
 
-	@Override
-	public void close()
+	public InventoryDefinition findInventory(int id)
 	{
-		channel.close().syncUninterruptibly();
-		group.shutdownGracefully();
-	}
-
-	public int getRevision()
-	{
-		return revision;
-	}
-
-	public Store getStore()
-	{
-		return store;
+		for (InventoryDefinition def : inventories)
+		{
+			if (def.id == id)
+			{
+				return def;
+			}
+		}
+		return null;
 	}
 }
